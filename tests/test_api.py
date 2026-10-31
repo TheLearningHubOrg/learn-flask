@@ -98,3 +98,9 @@ def test_factory_builds_isolated_apps():
     assert a is not b
     assert a.config["SECRET_KEY"] != b.config["SECRET_KEY"]
     assert {"api", "web"} <= set(a.blueprints)
+
+
+def test_production_refuses_the_dev_secret_key():
+    with pytest.raises(RuntimeError, match="SECRET_KEY"):
+        create_app("production", SECRET_KEY="dev-only-change-me")
+    assert create_app("production", SECRET_KEY="x" * 64).config["SESSION_COOKIE_SECURE"] is True

@@ -116,7 +116,7 @@ def tiny_app(environ, start_response):
 #   app(environ, start_response) -> iterable of bytes
 ```
 
-Flask is built on two libraries from the same Pallets project:
+Flask leans on a handful of Pallets libraries:
 
 1. **Werkzeug** supplies the WSGI plumbing: request and response objects, URL routing maps, the development server, the debugger, and security helpers such as password hashing.
 2. **Jinja** is the template engine, with sandboxing, inheritance and autoescaping.
@@ -278,7 +278,8 @@ This repository contains a small, complete application that follows the patterns
 learn-flask/
 ├── Dockerfile
 ├── pyproject.toml
-├── requirements.txt
+├── requirements.txt           # runtime dependencies (used by the Docker image)
+├── requirements-dev.txt       # adds pytest for local work
 ├── src/
 │   ├── wsgi.py                # Gunicorn entry point
 │   └── app/
@@ -294,9 +295,9 @@ learn-flask/
 ```
 
 ```bash
-# 1. Install dependencies
+# 1. Install dependencies (runtime plus test tools)
 python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 
 # 2. Create tables and start the dev server
 cd src
@@ -345,7 +346,7 @@ from __future__ import annotations
 
 from flask import Flask
 
-from .config import CONFIGS
+from .config import CONFIGS, DEV_SECRET_KEY
 from .extensions import db
 
 
@@ -357,6 +358,10 @@ def create_app(config_name: str = "development", **overrides) -> Flask:
     app.config.from_pyfile("settings.py", silent=True)   # instance/settings.py
     app.config.from_prefixed_env()                        # FLASK_SECRET_KEY, FLASK_SQLALCHEMY_DATABASE_URI ...
     app.config.update(overrides)
+
+    # Refuse to start production with the placeholder key from config.py
+    if config_name == "production" and app.config.get("SECRET_KEY") in (None, "", DEV_SECRET_KEY):
+        raise RuntimeError("SECRET_KEY must be set to a random value in production")
 
     # 2. Extensions: bind the unbound instances to this app
     db.init_app(app)
@@ -458,9 +463,11 @@ Blueprint rules worth memorizing:
 # src/app/config.py
 import os
 
+DEV_SECRET_KEY = "dev-only-change-me"     # create_app() rejects this in production
+
 
 class Config:
-    SECRET_KEY = os.environ.get("SECRET_KEY", "dev-only-change-me")
+    SECRET_KEY = os.environ.get("SECRET_KEY", DEV_SECRET_KEY)
     SQLALCHEMY_DATABASE_URI = os.environ.get("DATABASE_URL", "sqlite:///learn_flask.db")
     SQLALCHEMY_ENGINE_OPTIONS = {"pool_pre_ping": True}
     MAX_CONTENT_LENGTH = 1 * 1024 * 1024        # 413 for bodies over 1 MB
@@ -728,6 +735,8 @@ def new_task():
 ```
 
 ```html
+{# templates/new_task.html #}
+{% from "_macros.html" import render_field %}
 <form method="post" novalidate>
   {{ form.hidden_tag() }}   {# renders the csrf_token hidden input #}
   {{ render_field(form.title) }}
@@ -1046,7 +1055,7 @@ def register_error_handlers(app: Flask) -> None:
         return {"error": "Internal Server Error", "message": "unexpected error"}, 500
 ```
 
-With `TESTING = True` or `PROPAGATE_EXCEPTIONS = True`, Flask re-raises unhandled exceptions instead of calling the 500 handler, so tests see the real traceback. The companion API registers its JSON `HTTPException` handler on the blueprint itself; that catches everything raised inside its views, while an app-level handler (as above) is still needed for 404s on unknown URLs and 405s.
+`TESTING = True` (or `PROPAGATE_EXCEPTIONS = True`) makes Flask re-raise an exception that no handler claims, so tests see the real traceback instead of a generic 500 page. It does not bypass handlers you registered: once `errorhandler(Exception)` exists, that handler still runs in tests, so assert on its JSON body or register it only outside the testing config. The companion API registers its JSON `HTTPException` handler on the blueprint itself; that catches everything raised inside its views, while an app-level handler (as above) is still needed for 404s on unknown URLs and 405s.
 
 ### 5.4 Session Authentication with Flask-Login
 
@@ -1056,7 +1065,7 @@ For browser apps, Flask-Login manages the logged-in user in the session cookie.
 # pip install flask-login
 from functools import wraps
 
-from flask import abort, redirect, request, url_for
+from flask import abort, redirect, request, session, url_for
 from flask_login import LoginManager, UserMixin, current_user, login_required, login_user, logout_user
 
 login_manager = LoginManager()
@@ -1078,6 +1087,7 @@ def login():
     user = db.session.scalar(db.select(User).where(User.email == email))
     if user is None or not user.check_password(request.form.get("password", "")):
         abort(401)                           # same response for unknown user and wrong password
+    session.clear()                          # drop anything set while anonymous
     login_user(user, remember=False)
     return redirect(url_for("web.index"))
 
@@ -1099,7 +1109,7 @@ def admin_required(view):
     return wrapper
 ```
 
-Two easy-to-miss details: never redirect to a raw `?next=` parameter without checking that it is a relative URL on your own site (open redirect), and call `session.clear()` before `login_user()` so no state set by an anonymous visitor carries over into the authenticated session.
+Two easy-to-miss details: never redirect to a raw `?next=` parameter without checking that it is a relative URL on your own site (open redirect), and clear the session before `login_user()` (as above) so no state set by an anonymous visitor carries over into the authenticated session.
 
 ### 5.5 Stateless Token Authentication (JWT)
 
@@ -1181,7 +1191,7 @@ def obtain_token():
     ...
 ```
 
-Rate limits must use a shared store such as Redis in production; the default in-memory storage is per process, so with 8 workers a "5 per minute" limit silently becomes 40.
+The strict `default-src 'self'` policy also blocks inline `<script>` blocks such as the `tojson` example in 3.2; move that data into a `data-` attribute or an external script, or add a per-request nonce to the policy. Rate limits must use a shared store such as Redis in production; the default in-memory storage is per process, so with 8 workers a "5 per minute" limit silently becomes 40.
 
 ---
 
@@ -1454,6 +1464,14 @@ EXPOSE 8000
 CMD ["gunicorn", "--chdir", "src", "--bind", "0.0.0.0:8000", "--workers", "3", "--access-logfile", "-", "wsgi:app"]
 ```
 
+```bash
+docker build -t learn-flask .
+# The image runs the production config: it needs a real key and a real database
+docker run --rm -p 8000:8000   -e SECRET_KEY="$(python -c 'import secrets; print(secrets.token_hex(32))')"   -e DATABASE_URL="postgresql+psycopg://app:secret@db:5432/app"   learn-flask
+```
+
+Without `SECRET_KEY` the container exits at startup with a clear error, which is the intended behaviour. The SQLite default is for local work only; the image runs as a non-root user that cannot write to the code directory, so point `DATABASE_URL` at a real database server (and add its driver, such as `psycopg[binary]`, to `requirements.txt`).
+
 ```mermaid
 flowchart LR
     U["Clients"] --> LB["Load balancer / TLS termination"]
@@ -1530,7 +1548,7 @@ A buffering proxy such as Nginx in front of Gunicorn also protects sync and thre
 > **Answer**: With `preload_app = True` the app is imported in the master, and any connection opened there is inherited by every forked worker. Several processes then share one socket, producing interleaved protocol messages, corrupted results or SSL errors that are very hard to reproduce. Calling `db.engine.dispose(close=False)` in `post_fork` drops the inherited pool in the child without closing the parent's sockets, so each worker opens its own connections lazily.
 
 #### Q8: When would you choose `gevent` workers, and what are the risks?
-> **Answer**: `gevent` fits workloads with many concurrent, mostly idle connections such as long polling or slow upstream calls, because thousands of greenlets cost far less than threads. It relies on monkey-patching the standard library, so every blocking library must be cooperative; a C extension that blocks without yielding (some database drivers, CPU-heavy code) freezes all greenlets in that worker. Patching must happen before other imports, and you need a gevent-compatible driver such as psycopg with a patched socket layer. If the workload is truly connection-heavy, an ASGI framework may be the cleaner choice.
+> **Answer**: `gevent` fits workloads with many concurrent, mostly idle connections such as long polling or slow upstream calls, because thousands of greenlets cost far less than threads. It relies on monkey-patching the standard library, so every blocking library must be cooperative; a C extension that blocks without yielding (some database drivers, CPU-heavy code) freezes all greenlets in that worker. Patching must happen before other imports, and the database driver must cooperate with gevent: a pure-Python driver works once the socket module is patched, while psycopg2 needs a wait-callback helper such as psycogreen. If the workload is truly connection-heavy, an ASGI framework may be the cleaner choice.
 
 #### Q9: Does adding `async def` to Flask views improve throughput?
 > **Answer**: Generally no. Flask runs each async view in its own event loop on the worker thread, so the worker is busy until the coroutine finishes, exactly as with a sync view. The benefit is concurrency inside one request, for example awaiting three upstream calls with `asyncio.gather`. There is also overhead from creating the loop. If the goal is high connection concurrency per process, use gevent workers or move that service to an ASGI framework.
