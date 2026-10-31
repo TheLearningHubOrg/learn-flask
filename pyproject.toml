@@ -1,0 +1,21 @@
+[project]
+name = "learn-flask"
+version = "1.0.0"
+description = "Companion app for the Learn Flask masterclass: app factory, blueprints, SQLAlchemy and a JSON API"
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "The Learning Hub" }]
+requires-python = ">=3.10"
+dependencies = [
+    "flask>=3.1",
+    "flask-sqlalchemy>=3.1",
+    "sqlalchemy>=2.0",
+    "gunicorn>=23.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

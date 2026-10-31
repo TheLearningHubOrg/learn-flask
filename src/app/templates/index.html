@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Tasks | Learn Flask{% endblock %}
+{% block content %}
+  <h1>Tasks</h1>
+  {% if tasks %}
+    <ul>
+      {% for task in tasks %}
+        <li>{{ task.title }}{% if task.done %} (done){% endif %}</li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p>No tasks yet. POST one to <code>{{ url_for('api.create_task') }}</code>.</p>
+  {% endif %}
+{% endblock %}

@@ -1,0 +1,34 @@
+"""Configuration classes, selected by name in create_app()."""
+
+from __future__ import annotations
+
+import os
+
+
+class Config:
+    SECRET_KEY = os.environ.get("SECRET_KEY", "dev-only-change-me")
+    SQLALCHEMY_DATABASE_URI = os.environ.get("DATABASE_URL", "sqlite:///learn_flask.db")
+    SQLALCHEMY_ENGINE_OPTIONS = {"pool_pre_ping": True}
+    MAX_CONTENT_LENGTH = 1 * 1024 * 1024  # reject request bodies over 1 MB
+
+
+class DevelopmentConfig(Config):
+    DEBUG = True
+
+
+class TestingConfig(Config):
+    TESTING = True
+    SQLALCHEMY_DATABASE_URI = "sqlite:///:memory:"
+
+
+class ProductionConfig(Config):
+    SESSION_COOKIE_SECURE = True
+    SESSION_COOKIE_HTTPONLY = True
+    SESSION_COOKIE_SAMESITE = "Lax"
+
+
+CONFIGS = {
+    "development": DevelopmentConfig,
+    "testing": TestingConfig,
+    "production": ProductionConfig,
+}
